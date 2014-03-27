@@ -43,38 +43,20 @@
 ;; =============================================================================
 ;; Event Router
 
-(defn- log-in!
-  [{:keys [route uid] :as data}]
-  (do (swap! connections assoc uid (get-in route [:params :username]))
-      ()))
-
 (defn- topic-router
   [{:keys [route uid] :as data} ?reply-fn]
   (match [route]
-    [{:topic :auth :action :log-in}]  (log-in! route)
-    [{:topic :auth :action :log-out}]
-
-    [{:topic :chat :action :broadcast}]))
+    ))
 
 
 (comment
-  (defn- type-router
-    [{:keys [route uuid] :as data}]
-    (let [name (get-in new-state [:user :name])]
-      (case (:type route)
-        :log-in (swap! connections assoc uuid name)
-        :send-message (doseq [[k v] @connections]
-                        (chsk-send! k [:chat/broadcast
-                                       {:message (get-in tag [:params :message])
-                                        :sender v :time "just now"}]))
-        (info "Unmatched type event.")))))
+  )
 
 (defn- event-msg-handler
   [{:as ev-msg :keys [?reply-fn]} _]
   (let [session          (:session (:ring-req ev-msg))
         uid              (:uid session)
         [id data :as ev] (:event ev-msg)]
-    (debug ev)
     (match [id data]
       [:cursor/tx _] (topic-router data ?reply-fn)
       [:chsk/send _] (topic-router data ?reply-fn)
