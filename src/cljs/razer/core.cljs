@@ -48,6 +48,13 @@
 ;; =============================================================================
 ;; Event Handlers
 
+(defn- annotate-data
+  "Provide a consistent view of the data being sent to the server."
+  [data & {:keys [tx?]}]
+  (if tx?
+    (assoc {} :tx-data data :route (:tag data) :uid js/wsUUID)
+    (assoc {} :route data :uid js/wsUUID)))
+
 (defn handle-tx
   "All transactions excepting those explicitly marked ':ignore' will
    pass their data through this handler to the server. On
@@ -55,21 +62,19 @@
    is rolled back to its former state."
 
   [owner cursor data]
-  (let [chsk-send! (om/get-shared owner :chsk-send!)
-        data' (assoc data :uuid (get-in @cursor [:user :uuid]))]
-    (chsk-send! [:cursor/tx data'] timeout
+  (let [chsk-send! (om/get-shared owner :chsk-send!)]
+    (chsk-send! [:cursor/tx (annotate-data data :tx? true)] timeout
                 (fn [edn-reply]
                   (if (success? edn-reply)
                     (log edn-reply)
-                    (rollback! cursor data'))))))
+                    (rollback! cursor data))))))
 
 (defn handle-send
   "Similar to handle-tx, but used for server-side operations that do
    not affect the application state (cursor)."
   [owner cursor data]
-  (let [chsk-send! (om/get-shared owner :chsk-send!)
-        data' (assoc data :uuid (get-in @cursor [:user :uuid]))]
-    (chsk-send! [:chsk/send {:tag data'}] timeout
+  (let [chsk-send! (om/get-shared owner :chsk-send!)]
+    (chsk-send! [:chsk/send (annotate-data data :tx? true)] timeout
                 (fn [edn-reply]
                   (if (success? edn-reply)
                     (log edn-reply)
@@ -88,29 +93,36 @@
 (defn handle-event
   "Handle top-level UI events and websocket events."
   [[id data :as ev] _ {:keys [owner cursor]}]
-  (match [id data]
-    [:chsk/tx       _] (handle-tx owner cursor data)
-    [:chsk/send     _] (handle-send owner cursor data)
+  (let [root-ui (om/get-state owner :root-ui)]
+    (match [id data]
+      [:chsk/tx       _] (handle-tx owner cursor data)
+      [:chsk/send     _] (handle-send owner cursor data)
 
-    ;; [:root-ui/add-thing _] (om/transact! cursor [:things] #(conj % data)
-    ;;                                      {:type   :db/crud :topic :thing
-    ;;                                       :action :create})
+      ;; [:root-ui/add-thing _] (om/transact! cursor [:things] #(conj % data)
+      ;;                                      {:type   :db/crud :topic :thing
+      ;;                                       :action :create})
 
-    [:root-ui/log-in _] (om/transact! cursor [:user :logged-in?] (fn [_] true)
-                                      ;; {:type :user :topic :auth :action :log-in}
-                                      {:type :log-in})
+      [:root-ui/log-in username]
+      (put! root-ui [:chsk/send {:topic :auth :action :log-in
+                                 :params {:username username}
+                                 ;; The presence of the :target key
+                                 ;; means, "put the result from the
+                                 ;; server at this location in the
+                                 ;; server"
+                                 :target {:path      [:user]
+                                          :directive :merge}}])
 
-    [:root-ui/log-out _] (om/transact! cursor [:user :logged-in?] (fn [_] false)
-                                       {:type :log-out})
+      [:root-ui/log-out _] (om/transact! cursor [:auth :logged-in?] (fn [_] false)
+                                         {:topic :auth :action :log-out})
 
-    [:root-ui/send-message _] (do (om/set-state! owner :message-text "")
-                                  (handle-send owner cursor
-                                               {:type   :send-message
-                                                :params {:message data}}))
+      [:root-ui/send-message msg] (do (om/set-state! owner :message-text "")
+                                      (put! root-ui [:chsk/send {:params {:message msg}
+                                                                 :topic :chat
+                                                                 :action :broadcast}]))
 
-    [:chsk/state   _] (prn "Chsk state change: " data)
-    [:chsk/recv    _] (om/transact! cursor [:messages] #(conj % (second data)) :ignore)
-    :else (prn "unmatched event " ev)))
+      [:chsk/state   _] (prn "Chsk state change: " data)
+      [:chsk/recv    _] (om/transact! cursor [:messages] #(conj % (second data)) :ignore)
+      :else (prn "unmatched event " ev))))
 
 ;; =============================================================================
 ;; Components
@@ -163,23 +175,24 @@
         (start-router-loop! handle-event c {:owner owner :cursor app})))
     om/IRenderState
     (render-state [_ {:keys [root-ui message-text] :as state}]
-      (html
-       [:div
-        [:h1 "Om/Sente Chat"]
+      (letfn [(send-message [_]
+                (put! root-ui [:root-ui/send-message message-text]))]
+        (html
+         [:div
+          [:h1 "Om/Sente Chat"]
 
-        (om/build auth (:user app) {:state state})
+          (om/build auth (:auth app) {:state state})
 
-        (when (get-in app [:user :logged-in?])
-          [:div
-           [:h2 "Messages"]
-           (om/build messages (:messages app))
-           [:input {:type "text" :value message-text
-                    :on-change #(handle-state-change % :message-text owner)}]
-           [:button
-            {:type "button"
-             :on-click (fn [_]
-                         (put! root-ui [:root-ui/send-message message-text]))}
-            "Send"]])]))))
+          (when (get-in app [:auth :logged-in?])
+            [:div
+             [:h2 "Messages"]
+             (om/build messages (:messages app))
+             [:input {:type "text" :value message-text
+                      :on-change #(handle-state-change % :message-text owner)}]
+             [:button
+              {:type "button"
+               :on-click send-message}
+              "Send"]])])))))
 
 ;; =============================================================================
 ;; App Entry
@@ -188,7 +201,7 @@
   {:time nil :sender nil :message nil})
 
 (def app-state
-  (atom {:user {:name nil :logged-in? false :uuid js/wsUUID}
+  (atom {:auth {:name nil :logged-in? false}
          :messages []}))
 
 (let [{:keys [chsk ch-recv send-fn]} (sente/make-channel-socket!
