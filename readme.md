@@ -25,7 +25,7 @@ comments and ideas.
 I would argue that websockets are not just good for "real-time" web
 applications, but as a general mode of data transport from client to
 server and back (request/response). Traditional HTTP routes can be
-replaced with `core.match` and `EDN` data to a great degree of
+replaced with `core.match` and EDN data to a great degree of
 efficacy.
 
 ## Coordinating Components
@@ -43,7 +43,7 @@ synchronize client-side changes in app-state to a server. I would like
 to extend this idea to the *entire application*, rather than on a
 per-component basis.
 
-### Syncing Client Interactions with Server
+### Spec/Goals
 
 There are three cases that need to be handled.
 
@@ -70,3 +70,51 @@ There are three cases that need to be handled.
    client-side effect, the operation would fall into one of the above
    cases. In the event of an error however, a facility should be
    provided for a handler.
+
+### Osync
+
+The `:tx-listen` directive of `om.core/root` will intercept all Om
+transactions (see `om.core/transact!`) and pass the entire `tx-data`
+parameter to the server. Through server-aware design of the
+application cursor and use of the `tag` argument to
+`om.core/transact!`, the server can be given all of the information
+necessary to appropriately perform any datastore-affecting
+operations.
+
+<!-- In the event of an error, `tx-data` can be used to roll back the -->
+<!-- application state to its previous state. -->
+
+<!-- The `tag` parameter of `transact!` accepts arbitrary data, including -->
+<!-- functions or `core.async` channels (TODO: Verify that this is -->
+<!-- true). Error/success handlers/channels can be included this way to -->
+<!-- implement custom succes-handling/rollback implementations. Let's go -->
+<!-- over some use cases for how `tag` could be used to convey neccessary -->
+<!-- information to the server. -->
+
+When issuing a `transact!`, a tag can be attached that will specify a
+`:route` key and an optional map of `:handlers`. The `:route` key
+specifies a map of keywords that identify path the server's handler,
+*e.g.* `{:topic :models, :type :review, :action :create}`. The keys
+are arbitrary.
+
+Since the point of **osync** is to keep client-side data in sync with
+the server, I am not yet sure what an `:on-success` handler would look
+like. An `:on-error` handler is much more readily useful, and could be
+used to alert the component to received error messages. A sample tag
+might look like this:
+
+```clojure
+{:route {:topic :models, :type :review, :action :create}
+ :handlers {:on-error (fn [tx-data errors]
+                          (om/set-state! owner :errors errors)
+                          (rollback! tx-data))}}
+```
+
+Of course, the `:handlers` key will be `dissoc`ed prior to sending the
+tag to the server.
+
++ TODO: The issue right now is that a transact will provide the path
+  to the data that was updated (to the server), but there's no
+  context. How to provide context? For instance, I updated the *title*
+  field of a *recipe*. I want to update something like `{:title "The
+  Title"}`, but the path to the transacted data is just `"The title"`.

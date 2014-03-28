@@ -143,3 +143,9 @@
             :tx-listen (fn [tx-data root-cursor]
                          (when-not (ignore? tx-data)
                            (put! ch-recv [:chsk/tx tx-data])))}))
+
+(comment
+  {:route {:topic :models, :type :review, :action :create}
+   :handlers {:on-error (fn [tx-data errors]
+                          (om/set-state! owner :errors errors)
+                          (rollback! tx-data))}})
